@@ -1,0 +1,79 @@
+---
+title: "AWS Configuration"
+description: "Description of your new file."
+---
+
+**Steps**
+
+- In the Serval UI, Navigate to “Apps” and click “Connect AWS”. You will be presented with a configuration modal.
+
+![Image Pn](/images/image.png)
+
+- In AWS, Create a new role. Select “AWS Account” as the trusted entity type.
+
+![Image(1) Pn](/images/image\(1\).png)
+
+- Enter the account ID displayed in the Serval modal. Check “Require external ID” and enter the external ID displayed in the Serval modal (note that this ID is re-generated each time the modal is opened, so do not close the Serval modal until you have finished the configuration process).
+
+![Image(2) Pn](/images/image\(2\).png)
+
+- Attach policies based on the IAM actions you wish to perform from Serval. E.g. “IAMReadOnlyAccess” is useful for building workflows for reviewing IAM configuration. Note that we currently only support IAM, EC2, RDS and S3 actions (all actions are supported for these services). Support for other services can be added on request.
+
+![Image(3) Pn](/images/image\(3\).png)
+
+- Name your role and create it:
+
+![Image(4) Pn](/images/image\(4\).png)
+
+- **Important**: Once your role is created, you will need to update the trust policy as the default provided by AWS is not sufficient. Navigate to the role in AWS UI and select “Edit trust policy”:
+
+![Image(5) Pn](/images/image\(5\).png)
+
+- Update your trust policy to allow the TagSession action. Here is a template for the policy:
+
+```
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::992382851720:root"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "<replace-with-your-external-id>"
+                }
+            }
+        },
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::992382851720:root"
+            },
+            "Action": "sts:TagSession"
+        }
+    ]
+}
+```
+
+- Here is an example of the updated policy in the UI.
+
+![Image(6) Pn](/images/image\(6\).png)
+
+- Click update policy. Your role is now ready to go.
+- Once the role is created, copy the role ARN to the field in the Serval modal. Also enter your AWS Account ID:
+
+![Image(7) Pn](/images/image\(7\).png)
+
+![Image(8) Pn](/images/image\(8\).png)
+
+- Click Save in Serval.
+- You can now build workflows which use the AWS APIs you have allowed with the policies attached to the role, for example here is a sample workflow for listing all IAM roles:
+
+![Image(9) Pn](/images/image\(9\).png)
+
+- These workflows can then be initiated from your connected Slack channel.
+
+/

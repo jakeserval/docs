@@ -1,0 +1,18 @@
+---
+title: "Okta API Key Integration [Deprecated]"
+description: "Note this integration mechanism is deprecated, you should use the app integration mechanism instead."
+---
+
+- Login to Okta as an admin. You can use a preview or regular Okta instance.
+- Navigate to “Security” \> “API” \> “Create Token”
+
+  ![Image(31) Pn](/images/image\(31\).png)
+- Create a token and give it a descriptive name: 
+
+  ![Image(32) Pn](/images/image\(32\).png)
+- Note that the API token you create will have the same role as the user who is creating the token. This will govern the permissions Serval will have in Okta. Optionally, you may wish to create a dedicated user for Serval to use before creating the API token.
+- Copy your token.
+- In Serval, navigate to “Apps” \> “Connect Okta”
+- Copy your API key into the Okta API Key input.
+- In instance ID, copy the full domain name for your Okta instance. If using a production Okta instance, this will look like `<your-subdomain>.okta.com` . For a preview instance, this will look like `<your-subdomain>.oktapreview.com`
+- You should now be able to build and use Okta related workflows. A good sample workflow to start with is a “List Okta Groups” workflow.

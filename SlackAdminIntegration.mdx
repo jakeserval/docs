@@ -1,0 +1,28 @@
+---
+title: "Slack Admin Integration"
+---
+
+💡 Connecting the Slack Admin integration is fairly straight forward but getting all the permissions/scopes correct is slightly complicated. See the **Important Setup Considerations** section for troubleshooting tips. 
+
+## Steps
+
+- In the Serval UI, Navigate to “Apps”, “Available”, then click “Slack Admin”. You will be rerouted to Slack’s integration page.
+
+![Image(53) Pn](/images/image\(53\).png)
+
+- Hit allow and Slack Admin should be connected\!
+
+## **Important Setup Considerations**
+
+- Unlike the standard Slack integration, Slack Admin will use a user token rather than a bot token, meaning it assumes the permissions of the user. If your user does not have the correct permission to run certain actions, this will result in a permission error.
+- This integration MUST be connected by the primary owner, an org owner, or an org admin. Ideally, the “primary owner” of the org will be the one to connect this integration as that is the user with the most permission.
+- If an org owner or org admin is used to connect this integration, ensure that the role has full permission in the org settings. The org settings can be found in the slack desktop app here:
+
+![Image(55) Pn](/images/image\(55\).png)
+
+- From there, navigate to People → Manage permissions
+
+![Image(54) Pn](/images/image\(54\).png)
+
+- Common missing permissions are `Manage public channels for a team` and `Manage private channels at the org level` as those are only enabled for the primary owner by default.
+- The Serval Admin app will be treated as a “Workspace Admin”, so you will just need to enable any missing permissions for the “Workspace Admin” account type.

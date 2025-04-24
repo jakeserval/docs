@@ -1,0 +1,34 @@
+---
+title: "Resolving Cookie Issues for AWS Session Granting"
+---
+
+If requests to “Initiate AWS Session” are failing in Serval, you may need to allow third-party cookies in your browser for Serval. Follow the correct instructions based on your browser:
+
+<Accordion title="Chrome" icon="sparkles">
+  1. Go to **Settings** \> **Privacy and security** \> **Third Party Cookies**.
+  2. Under **Sites allowed to use third-party cookies:**
+
+  - Add https://app.serval.com.
+  - Add your bridge service URL (e.g. https://serval.security-opal.cf.verkada.com).
+</Accordion>
+
+<Accordion title="Firefox" icon="sparkles">
+  1. Go to **Settings** \> **Privacy & Security.**
+  2. Select **Manage Exceptions.**
+  3. Enter https://app.serval.com, then **Add Exception**.
+  4. Enter your bridge server URL (e.g. https://serval.security-opal.cf.verkada.com), then **Add Exception**.
+  5. Click **Save Changes.**
+</Accordion>
+
+<Accordion title="Safari" icon="sparkles">
+  1. Go to **Safari** \> **Settings** \> **Privacy**.
+  2. Deselect **Block all cookies**.
+</Accordion>
+
+<Accordion title="Brave" icon="sparkles">
+  1. Go to `brave://settings/cookies`.
+  2. Under **Sites that can always use cookies:**
+
+  - Add https://app.serval.com.
+  - Add your bridge server URL (e.g. https://serval.security-opal.cf.verkada.com).
+</Accordion>

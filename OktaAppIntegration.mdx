@@ -1,0 +1,70 @@
+---
+title: "Okta App Integration"
+---
+
+1. Create App Integration
+   - Log into your company's Okta admin console
+   - Navigate to Applications \> Applications
+   - Select `Create App Integration`
+
+     ![Image(33) Pn](/images/image\(33\).png)
+   - Select API Services
+
+     ![Image(34) Pn](/images/image\(34\).png)
+   - Title the app "Serval" (this can be any value, but make sure to give it a title that helps you remember that this application is for integration with the Serval platform.
+   - Hit Save & Finish creating the app integration.
+2. Configure scopes/permissions
+   - Grant API scopes for the new integration. We recommend at least granting [okta.users.read](http://okta.users.read), [okta.groups.read](http://okta.groups.read) and [okta.apps.read](http://okta.apps.read) access, as this will allow you to use read-only endpoints within Serval. However, to facilitate taking action in Okta to grant users access to applications or solve other common issues automatically, you will also need to grant some manage scopes (i.e. okta.users.manage, okta.groups.manage, okta.apps.manage).
+
+     ![Image(35) Pn](/images/image\(35\).png)
+   - Next, you will need to grant this app integration an admin role. Navigate to Admin roles and hit Edit Assignments.
+
+     ![Image(36) Pn](/images/image\(36\).png)
+
+- You must now assign roles to the application. [Here](https://support.okta.com/help/s/article/403-error-with-org2org-provisioning-with-oauth?language=en_US) is an article which explains the difference between roles and scopes. You can select one of the following options:
+  - Grant Serval the `Super Administrator` role. This will allow Serval to access all resources in your account, but only using the API scopes you configured previously.
+  - Assign another set of predefined roles. We recommend "Group Administrator" and "Application Administrator" at a minimum. [Here](https://help.okta.com/en-us/content/topics/security/administrators-admin-comparison.htm) is an article which outlines the different permissions which can be accessed with these roles.
+  - Create a custom role. This option can be used if you want to configure fine grained permissions for Serval. Again, API scopes also govern which actions Serval can take in your Okta account.
+
+
+- Creating a new role
+  - If you’ve chosen to create a new role, grant it the permissions you want Serval to be able to perform.
+
+    ![Image(37) Pn](/images/image\(37\).png)
+  - Now you will need to assign a resource set to this role. Add an assignment, select the ones you like, and hit Save Changes\
+    ![Image(38) Pn](/images/image\(38\).png)
+  - If you don’t already have an applicable resource set, you can create a resource set for this admin role to have control over. Navigate to Security → Administrators and then select the resources tab. Select Create a new resource set. Select the resources you want Serval to be able to manage and hit Create.\
+    ![Image(39) Pn](/images/image\(39\).png)
+
+    ![Image(40) Pn](/images/image\(40\).png)
+
+1. Complete app integration configuration:
+
+- In general settings, uncheck the box requiring DPoP and hit Save. We do not currently provide PoP.
+
+![Image(41) Pn](/images/image\(41\).png)
+
+- Next, configure the client credentials. We use the private key/public key method for added security. Make sure your configuration looks like this:
+
+![Image(42) Pn](/images/image\(42\).png)
+
+- Next, select `Add Key` and then generate one. Copy the JSON \*\*data to your clipboard and select Done.
+  - Note: Just because a key was generated does not mean it was saved, the key does not save until you select Done. Please verify that a key was actually created & saved.
+
+  ![Image(43) Pn](/images/image\(43\).png)
+
+1. Configure the integration in Serval
+
+- In Serval, navigate to `Applications` and then the `Available` tab. Find the Okta integration and press `Connect`.
+
+![Image(44) Pn](/images/image\(44\).png)
+
+- Copy the JSON from the last step into the `Client Secret` section.
+- Your Instance ID should be the _domain_ of your okta instance, so if your okta is found at `https://mycompany.okta.com/`, your instance ID would be `mycompany.okta.com` . If you are in the admin console, do _not_ include the `-admin` in this (i.e. `mycompany-admin.okta.com`)
+- Your Client ID can be found at the top of the app integration page:
+
+![Image(45) Pn](/images/image\(45\).png)
+
+- Enter scopes. The scopes you enter should be a comma separated list of what you granted the application previously in Okta. For example: `okta.apps.read, okta.apps.manage, okta.users.read, okta.users.manage, okta.groups.read, okta.groups.manage`
+- Click `Save`
+- You should now be able to build or install workflows which leverage Okta APIs, e.g. you could build a workflow for creating a new Okta group or a new user.

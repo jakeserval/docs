@@ -1,0 +1,49 @@
+---
+title: "Serval On-Premise Architecture"
+---
+
+**Overview**
+
+Serval can be configured to run in a hybrid cloud / on-premise architecture. In this configuration, sensitive API access is handled entirely by on-premise components, while data is stored and encrypted at rest in Serval’s cloud deployment. Overall this minimizes the number of components which need to be maintained on-premise, while ensuring there is no access to sensitive APIs from Serval’s cloud environment.
+
+**Component Details**
+
+There are three key components that are built and deployed by the customer. Serval will provide the build instructions and relevant Kubernetes configuration for these:
+
+- Workers — These are responsible for executing workflow code and interacting with external APIs.
+- Proxy Server — Responsible for encrypting and decrypting sensitive API credentials using a customer owned key (e.g. AWS KMS key). Also proxying requests made by workers and injecting the necessary credentials.
+- Signing Server — Responsible ensuring workflow code is signed correctly using a customer managed key.
+
+The diagram below outlines how all the different components interact:\
+![Image(67) Pn](/images/image\(67\).png)
+
+Here, Workers deployed by the customer will do the following:
+
+- Speak to Serval cloud to request any updates to workflow definitions:
+  - If there are any updates, they will download the new definitions and check that those definitions have been signed with the customer managed key using the Signing Server.
+- Speak to Serval cloud to request any workflows to run:
+  - If there are workflows to run, then workers will execute them and send the results back to Serval cloud.
+  - Any requests made during these workflows runs will be proxied via the Proxy Server. The proxy server will have access to third-party API credentials that have been encrypted using the customer managed key. It will inject the correct credentials into a given request based on the integration ID and the request destination. Note that the encrypted credentials will be stored in Serval cloud to minimize state stored on-premise.
+  - Requests are made directly from the Proxy Server to the given API. Internal APIs can therefore be exposed only to the Proxy Server but still made accessible via workflows.
+
+**Updating Workflows and Credentials**
+
+Workflow definition updates will be made using the Serval web-application. However, the browser will need to be configured to speak to the signing server to sign any updates. Access to the signing server should be controlled using a customer managed, private VPN.
+
+This is the same for updating credentials — New credentials will need to be encrypted using a customer managed key via the signing server and then sent to the Serval cloud environment in an encrypted form.
+
+**Logging**
+
+Note that all components will log all important operations, this includes at least:
+
+- ID and success / failure state of any initiated workflow. This will also include the user ID who initiated the workflow.
+- ID and success / failure state of any workflow step.
+- All external API requests (location service, integration ID, body, response).
+- User ID and workflow information for any signing requests.
+- User ID and integration ID for any requests to encrypt new credentials.
+- Integration ID for any decrypt operations.
+
+**Additional Notes**
+
+- If a Slack help-desk connection is required, then the connection token will be stored in Serval cloud and encrypted using a Serval managed key. This is so that help-desk messages can be sent to Slack from Serval cloud.
+- Workers authenticate with Serval cloud initially using an API key. The authentication process returns a short-lived JWT which is used for subsequent requests and refreshed periodically.

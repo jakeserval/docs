@@ -1,0 +1,83 @@
+---
+title: "Serval Public API"
+---
+
+**Obtaining Credentials**
+
+Contact the Serval team to obtain API credentials using your shared Slack channel. They will distribute API credentials to you consisting of a **Client ID** and **Client Secret**.
+
+**Generating an Access Token**
+
+To obtain an access token, you will need to send a POST request to the [public.api.serval.com/v1/auth/token](http://public.api.serval.com/v1/auth/token) endpoint. In the response, you will receive a token which can be used to make API calls.
+
+Here is a detailed breakdown of the request parameters:
+
+- **Authorization Header**: This contains the **Client ID** and **Client Secret**, encoded in base64. The format is Authorization: Basic `<base64(client_id:client_secret)>`.
+- **Content-Type**: Set this to `application/x-www-form-urlencoded`.
+- **grant_type**: This should be set to client_credentials for this flow.
+
+Here is an example request:
+
+```bash
+curl --location --request POST 'https://public.api.serval.com/v1/auth/token' \
+    --header "Authorization: Basic $(echo -n "$CLIENT_ID:$CLIENT_SECRET" | base64)" \
+    --header "Content-Type: application/x-www-form-urlencoded" \
+    --data "grant_type=client_credentials"
+```
+
+In the response, you will receive an access token:
+
+```json
+{
+  "access_token": "<a_temporary_access_token>",
+  "token_type": "bearer",
+  "expires_in": 259200
+}
+```
+
+**Make your first API Call**
+
+With your `access_token`, you’re ready to make your first API call. Here’s an example of retrieving tickets for a given team for a given time period:
+
+```json
+curl \
+  -H "Accept: application/json" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+    'https://public.api.serval.com/teams/{team_id}/tickets?startTime=2025-02-18T13:42:00.804756Z&endTime=2025-02-19T13:42:00.804757Z'
+```
+
+Example response:
+
+```json
+{
+  "tickets": [
+    {
+      "id": "b3b09955-0000-4c01-9999-728cf606c201",
+      "friendlyIdentifier": "TKT-1234",
+      "forTeam": {
+        "id": "918f1111-22a3-73ad-8d21-c64bbd085111",
+        "name": "Example Team"
+      },
+      "name": "Access Request for GitHub via Okta",
+      "createdAt": "2025-02-20T18:23:22.059579Z",
+      "createdByUser": {
+        "id": "5e507880-bbbb-cccc-97de-2e9c51882fff",
+        "email": "example.user@example.com"
+      },
+      "status": {
+        "id": "ecc7ddf9-dddd-eeee-87c8-e7b103cd41a2",
+        "teamId": "918f1111-22a3-73ad-8d21-c64bbd085111",
+        "statusGroup": "IN_PROGRESS",
+        "name": "In Progress",
+        "description": "Request is actively being worked on. Actions are being taken to understand and resolve the request."
+      },
+      "priority": {
+        "id": "d8029237-aaaa-bbbb-cccc-fb93d024f855",
+        "teamId": "918f1111-22a3-73ad-8d21-c64bbd085111",
+        "priority": "NONE",
+        "description": "No action required at this time. Significantly more information is required, the issue is not a valid ticket, or is being logged for reference purposes only. There is no immediate impact on users, and no resolution is needed."
+      }
+    }
+  ]
+}
+```

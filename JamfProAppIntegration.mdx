@@ -1,0 +1,42 @@
+---
+title: "Jamf Pro App Integration"
+---
+
+1. Create or select an API role
+
+- Log in at \<yourdomain\>.[jamfcloud.com](http://jamfcloud.com) and navigate to the settings. From there, search for “API roles and clients”
+
+![Image(46) Pn](/images/image\(46\).png)
+
+- From the API Roles tab you may now click on the \+ New button in the top right to begin creating a new API Role. If you already have a role that you wish to use with Serval, you may skip the rest of this section.
+
+![Image(47) Pn](/images/image\(47\).png)
+
+- Create the API Role by choosing a name and selecting the privileges you wish Serval to have and hit Save.
+
+![Image(48) Pn](/images/image\(48\).png)
+
+1. Create an API Client
+
+- From the same settings page, navigate to the API Clients tab and click the \+ New button once again.
+
+![Image(49) Pn](/images/image\(49\).png)
+
+- From here, begin filling out the details: For the name, we recommend something like `Serval Integration`. Make sure to include the proper role(s) and set a custom Access token lifetime if you wish to do so. Confirm that the API client is enabled and then hit save.
+  - Note: For more details on how this integration works from a security perspective, check out this doc: [Jamf Integration Security Details](https://www.notion.so/Jamf-Integration-Security-Details-1065b4e67d2680c49e6ad47914ee5b19?pvs=21)
+
+![Image(50) Pn](/images/image\(50\).png)
+
+- With the client created, next you will need to hit the Generate client secret button to generate the client credentials. Be sure to keep the client ID and the client secret on hand for the next section.
+
+  ![Image(51) Pn](/images/image\(51\).png)
+
+1. Configure the integration in Serval
+
+- In Serval, navigate to Applications and then the Available tab. Find the Jamf integration and press Connect.
+
+![Image(52) Pn](/images/image\(52\).png)
+
+- The Jamf Instance ID should be the subdomain of your jamfcloud URL. For example, if your jamfcloud URL is `serval.jamfcloud.com`, you should enter `serval` here.
+- Copy over the client ID and client secret from the previous section.
+- Leave the scopes blank and hit `Save`. That’s it\! Jamf should now be connected.

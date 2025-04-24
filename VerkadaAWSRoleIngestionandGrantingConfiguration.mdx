@@ -1,0 +1,442 @@
+---
+title: "Verkada AWS Role Ingestion and Granting Configuration"
+---
+
+## **Ingestion Configuration**
+
+Perform the following setup for _each_ AWS account for which Serval will ingest roles and facilitate access.
+
+<Accordion title="AWS Account Ingestion Role configuration" icon="sparkles">
+  1. In AWS, Create a new role. Select “AWS Account” as the trusted entity type.\
+     ![Image(56) Pn](/images/image\(56\).png)
+  2. Enter the ID of the account that your worker is deployed in. Optionally, check “Require external ID” and enter a randomly generated ID. If you choose to require external ID make sure to set this ID aside.\
+     ![Image(57) Pn](/images/image\(57\).png)
+  3. Skip through adding permission policies for now. Permissions can be added through an in-line policy later.\
+     ![Image(58) Pn](/images/image\(58\).png)
+  4. Name and create the role:\
+     ![Image(59) Pn](/images/image\(59\).png)
+  5. Once your role is created, you will need to update the trust policy as the default provided by AWS is not sufficient. Navigate to the role in AWS UI and select “Edit trust policy”
+  6. Update your trust policy to allow the TagSession action. Here is a template for the policy:
+
+     ```json
+     {
+         "Version": "2012-10-17",
+         "Statement": [
+             {
+                 "Effect": "Allow",
+                 "Principal": {
+                     "AWS": "arn:aws:iam::<WORKER_ACCOUNT_ID>:root"
+                 },
+                 "Action": "sts:AssumeRole",
+                 "Condition": {
+                     "StringEquals": {
+                         "sts:ExternalId": "<replace-with-your-external-id>"
+                     }
+                 }
+             },
+             {
+                 "Effect": "Allow",
+                 "Principal": {
+                     "AWS": "arn:aws:iam::<WORKER_ACCOUNT_ID>:root"
+                 },
+                 "Action": "sts:TagSession"
+             }
+         ]
+     }
+     ```
+  7. Next, navigate to permissions and select “Create inline policy”\
+     ![Image(60) Pn](/images/image\(60\).png)
+  8. Add the following permission policy. These permissions are required to be able to properly ingest all the data we require:
+
+     ```javascript
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Action": [
+             "iam:ListRoleTags",
+             "iam:ListRoles",
+             "iam:ListRolePolicies",
+             "iam:ListAttachedRolePolicies",
+             "iam:GetRolePolicy",
+             "iam:GetPolicy",
+             "iam:GetPolicyVersion",
+             "iam:GetRole",
+             "rds:DescribeDBInstances",
+             "rds:DescribeDBClusters",
+             "ec2:DescribeInstances",
+             "eks:DescribeCluster",
+             "eks:ListClusters"
+           ],
+           "Resource": "*"
+         }
+       ]
+     }
+     ```
+</Accordion>
+
+<Accordion title="Worker Pod Role Configuration" icon="sparkles">
+  - The **worker** pod will need permission to assume roles.
+  - The easiest way to configure this is to use the [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) functionality. _This will need to be enabled separately if not already turned on for a given cluster_\*.\*\*\* [This guide](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-agent-setup.html) walks through enabling the pod identity agent.
+  - Here is some example Terraform code for creating an IAM Role for the worker, attaching the correct role policy and adding the necessary EKS pod identity association:
+
+    ```python
+    # The IAM Role to give to the Serval worker
+    resource "aws_iam_role" "this_service_role" {
+      name               = "eks-pod-identity-serval-worker"
+      assume_role_policy = data.pod_identity_aws_iam_policy_document.assume_role.json
+    }
+    
+    # Trust policy which allows the EKS pod identity system the ability to use this role
+    data "pod_identity_aws_iam_policy_document" "assume_role" {
+      statement {
+        effect = "Allow"
+    
+        principals {
+          type        = "Service"
+          identifiers = ["pods.eks.amazonaws.com"]
+        }
+    
+        actions = [
+          "sts:AssumeRole",
+          "sts:TagSession"
+        ]
+      }
+    }
+    
+    # Policy document and attachment so the role can assume roles in other accounts
+    data "aws_iam_policy_document" "policy" {
+      statement {
+        effect = "Allow"
+        actions = [
+          "sts:AssumeRole",
+    	    "sts:TagSession"
+        ]
+        resources = ["*"]
+      }
+    }
+    resource "aws_iam_policy" "policy" {
+      name        = "assume-role-policy-serval-worker"
+      description = "Policy to allow assuming roles in other AWS accounts."
+      policy      = data.aws_iam_policy_document.policy.json
+    }
+    resource "aws_iam_role_policy_attachment" "policy_attachment" {
+      role       = module.this_service_role.role_name
+      policy_arn = aws_iam_policy.policy.arn
+    }
+    
+    # Association between the role and a service account called "serval-worker-sa"
+    # (to be created separately)
+    resource "aws_eks_pod_identity_association" "pod_identity_association" {
+      cluster_name    = "<your_cluster_name>"
+      namespace       = "<serval_namespace>"
+      service_account = "serval-worker-sa"
+      role_arn        = aws_iam_role.this_service_role.arn
+    }
+    ```
+  - A service account will then need to be created for the Serval worker in the correct Kubernetes namespace. Here is an example service account configuration that should suffice:
+
+    ```yaml
+    ---
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: serval-worker-sa## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:
+    ## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:
+    ## **Access Granting Configuration**
+    
+    Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+    
+    - A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+    - The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+    - This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+    - The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+    - That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+    - To facilitate temporary access to a given role for a user:
+        - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) ****for the lifetime of the request.
+        - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+        - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+        - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+        - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+        - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+            1. Authenticate the user with their Serval token.
+            2. Check that there is a valid OIDC token in memory linked to their account.
+            3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+            4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+            5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+            6. The user can then access the role using those credentials until they expire.
+    
+    Here are instructions for setting up the different components involved:
+    
+    
+    ```
+  - We will then need to update the worker pod to use this service account (Alex can take care of this).
+</Accordion>
+
+**Access Granting Configuration**
+
+Serval can grant temporary access to roles in any of the linked AWS accounts. Here is an overview of how this works:
+
+- A **bridge** server is deployed in the on-prem environment. This a separate Go service that will run alongside the existing **worker** deployment.
+- The **bridge** server will be responsible for creating and maintaining OIDC tokens for users. These will be used to generate temporary AWS credentials for roles that a user is allowed access to.
+- This **bridge** server will also be used for signing workflows (and by the worker for checking signatures). However we will configure signing separately.
+- The **bridge** server will need to be accessible by users on your private VPN. It will also need a **Client ID** and **Client Secret** for a new OIDC application set up in Okta for this purpose.
+- That **Client ID** will then need to be added to the Trust Policy for any AWS Role which Serval can grant access to.
+- To facilitate temporary access to a given role for a user:
+  - The user will request that role via Serval (e.g. in Slack), with desired duration etc. If this is approved, then the user will have access to that **Entitlement** (i.e. Role) \*\*\*\*for the lifetime of the request.
+  - The user will visit their request in [app.serval.com](http://app.serval.com) to initiate a temporary AWS session based on that **Entitlement**.
+  - They will click a button to generated temporary AWS access credentials for that Role (i.e. to assume the role).
+  - The Serval web application will contact the **bridge** server directly to check if it has a valid OIDC token for that user in it’s in-memory store. If not, the user will go through the standard OIDC auth process: The **bridge** server will redirect them to Okta, if they authenticate then Okta will redirect back to the **bridge** server and pass an auth code that the **bridge** server will exchange for a token. The process for this is outlined [here](https://developer.okta.com/docs/guides/sign-into-web-app-redirect/go/main/).
+  - Note that we validate that the user has a valid Serval authorization token before initiating this process. This is a JWT that will be checked for validity against the Serval cloud auth service. The OIDC token generated via Okta will be linked to the Serval ID of the user. We also validate that the user email’s match for the OIDC token and Serval token.
+  - With a valid OIDC token in place for the current user, a request will be made to the **bridge** server to generate temporary credentials for the request role / entitlement. The **bridge** server will:
+    1. Authenticate the user with their Serval token.
+    2. Check that there is a valid OIDC token in memory linked to their account.
+    3. Check with Serval Cloud that this user still has access to the given role / entitlement (i.e. access has not expired, or was never granted etc).
+    4. Assuming these checks pass, make a call to AWS to `AssumeRoleWithWebIdentity` , with an expiry time set to the minimum of the remaining entitlement validity time and 3 hours.
+    5. Return the temporary **AWS Access Key ID**, **Secret Accecss Key** and **Session Token** values for that role.
+    6. The user can then access the role using those credentials until they expire.
+
+Here are instructions for setting up the different components involved:
+
+<Accordion title="Create a VPN accessible endpoint for the Serval bridge server" icon="sparkles">
+  - The **bridge** server will be deployed as a Kubernetes service named **svbridge-api**, connected to port 80.
+  - A Cloudflare endpoint will need to be configured to route to that service. As an example, the endpoint may be [**serval.cf.verkada.com**](http://serval.cf.verkada.com)**.**
+</Accordion>
+
+<Accordion title="Create a new OIDC application in Okta" icon="sparkles">
+  - Visit Okta Admin portal \> Applications \> Create App Integration\
+    ![Image(61) Pn](/images/image\(61\).png)
+  - Ensure it is an OIDC web application:\
+    ![Image(62) Pn](/images/image\(62\).png)
+  - Configure the correct URLs for sign-in redirect and logout. These should point to the /oidc/auth/callback and /oidc/auth/logout URLs respectively:\
+    ![Image(63) Pn](/images/image\(63\).png)
+  - Configure assignment:\
+    ![Image(64) Pn](/images/image\(64\).png)
+  - Once the application is saved, you will have a **Client ID **and **Client Secret** value:\
+    ![Image(65) Pn](/images/image\(65\).png)
+  - These will need to be shared with Alex to set as Kubernetes secrets that are only accessible to the **bridge** server.
+</Accordion>
+
+<Accordion title="Add the OIDC application as an identity provider in AWS" icon="sparkles">
+  - You will need to do this for _each_ account which has roles you want accessible via Serval.
+  - Visit IAM \> Identity Providers.
+  - Select “Add Provider” and configure the provider accordingly:\
+    ![Image(66) Pn](/images/image\(66\).png)
+  - The provider URL will be your Okta instance URL.
+  - The audience will be the **Client ID** of the Okta OIDC application created previously.
+</Accordion>
+
+<Accordion title="Configure AWS roles so that Serval can grant temporary access to them" icon="sparkles">
+  - For each role / account that you wish Serval to ingest and facilitate access for, you will need to do the following.
+  - Ensure that you have added the Okta OIDC application configuration as an identity provider in the AWS account:
+  - Add a “serval” tag to the role. Key is “serval”, value can be empty.
+  - Attach any polices that you wish to be granted when the role is granted to a user.
+  - Attach the following trust policy:
+
+    ```json
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Federated": "arn:aws:iam::${ACCOUNT_ID}:oidc-provider/${IDP_ISSUER_URL}"
+                },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                    "StringEquals": {
+                        "${IDP_ISSUER_URL}:aud": "${SERVAL_OIDC_APP_CLIENT_ID}"
+                    }
+                }
+            }
+        ]
+    }
+    ```
+  - The values are as follows:
+    - `ACCOUNT_ID` — The ID of the current AWS account being configured.
+    - `IDP_ISSUER_URL` — The URL of your Okta instance which was configured as an identity provider.
+    - `SERVAL_OIDC_APP_CLIENT_ID` — The **Client ID** of the application created in Okta.
+  - So for example, the policy may look like this:
+
+    ```json
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Federated": "arn:aws:iam::879385280829:oidc-provider/verkada-eng.okta.com"
+                },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                    "StringEquals": {
+                        "verkada-eng.okta.com:aud": "0oakraaw2r3Bm0HCB1d7"
+                    }
+                }
+            }
+        ]
+    }
+    ```
+</Accordion>
